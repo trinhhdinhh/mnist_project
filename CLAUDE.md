@@ -145,7 +145,7 @@ mnist_project/
 
 ## Milestones
 - [x] 0. Explore the data (reproduce the facts above in my own `explore.py`)
-- [ ] 1. `data.py`: load + reproducible 80/20 split + preprocessing
+- [x] 1. `data.py`: load + reproducible 80/20 split + preprocessing
 - [ ] 2. KNN (k = 1, 3, 5)
 - [ ] 3. Naive Bayes + θ visualization
 - [ ] 4. Linear classifier: derive the gradient, gradient check, train

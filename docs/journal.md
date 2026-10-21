@@ -65,3 +65,76 @@ Functions in `explore.py`:
 - "Blobs" prediction: **wrong**. The grid looks clearer than I expected.
 
 **AI used this step?** Yes: guidance and hints only, no code (ai_log rows from 2026-10-20, Step 0).
+
+---
+
+### Step 1: data.py (load, split, preprocess)  (2026-10-21)
+
+**Before coding: my understanding**
+Goal: one shared, reproducible setup for all five models. Load all 60,000 images with labels, make a stratified 80/20 split with a fixed seed (saving the indices), and convert to float32 in [0, 1] (flattened for 4 of the models).
+
+Why stratify (in my own words): _(todo)_
+
+My predictions (written before running anything):
+- Memory for X as uint8 / as float32: _(todo)_
+- Time to load all 60,000 PNGs: _(todo)_
+
+**Plan**
+Functions in `data.py`:
+- `load_images(data_dir, max_per_digit=None)` → `X` (N, 28, 28) uint8, `y` (N,) int
+- `stratified_split(y, test_frac=0.2, seed=0)` → `train_idx`, `test_idx`
+- `preprocess(X, flatten)` → float32 in [0, 1], shape (N, 784) or (N, 28, 28)
+
+**Decisions + reasoning**
+- Split returns *indices*, not copies of images, so they can be saved and every model uses exactly the same test set
+- Files are `sorted` before loading, so index *i* always points to the same image (otherwise a "reproducible" split would silently change)
+- Commit `results/split.npz` or rely on seed=0? _(todo: my choice + why)_
+
+**What went wrong**
+- `images = [], labels = []`: Python reads it as a chained assignment, so it fails with `ValueError` (only visible once the function is actually called) | Fix: `images, labels = [], []`
+- Lines after `files = ...` were outside the `for digit` loop, so `files` gets overwritten each pass and only digit 9 would load | Fix: indent everything that happens once per digit inside the loop
+- `if max_per_digit == None` was backwards (it cut the list when *no* limit was given) | Fix: `is not None`
+- Stray `return True` inside the loop would exit after the first digit | Fix: removed
+- Empty `.append()` calls caused a TypeError | Fix: `np.array(Image.open(path))` and `digit` (given by Claude)
+
+**Result**
+- `load_images(..., max_per_digit=50)` → `(500, 28, 28) uint8`, `y` `(500,) int64`, first labels `[0 0 0 0 0]`, last `[9 9 9 9 9]` ✔ matches the expected output
+- Full load (60,000) time: about 5.0 s (measured by Claude while checking the split). My prediction: _(todo)_
+- `stratified_split` bugs: copied the REPL demo `np.array([3,1,3]) == 3` instead of `y == digit`; appended the count `n_test` instead of index slices; first gave train the test slice. Fixed: test = `idx[:n_test]`, train = `idx[n_test:]`
+- `preprocess` first draft copied Claude's toy demo array instead of using the parameter `X`; `b / 255` and `b.reshape(...)` computed results but threw them away; no `return`, so the function returned `None` (`AttributeError: 'NoneType' object has no attribute 'shape'`)
+- `preprocess` final version (given by Claude, see ai_log): `preprocess(X)` → `(500, 784) float32`, min 0.0, max 1.0; `preprocess(X, flatten=False)` → `(500, 28, 28)` ✔
+- `get_data` bugs: named `load_images` without calling it (no `()`); then called all three functions with no arguments (`TypeError: missing 'data_dir'`); `DATA_DIR` was not defined in data.py; missing `return`. Lesson: parameters (names in `def`) vs arguments (values passed in); `get_data` passes `flatten`/`max_per_digit`/`seed` down to the functions that use them
+- `get_data()` full run: `(48000, 784) (48000,) (12000, 784) (12000,)`; test per digit [1185 1348 1192 1226 1168 1084 1184 1253 1170 1190], **identical** to the earlier split check, so the split is reproducible end to end ✔. Indices saved to `results/split.npz`
+- **Pattern I keep hitting:** (1) copying an *example* literally instead of adapting it to my own variables (`[3,1,3]`, the toy array); (2) calling something without saving its result (`iterdir()`, `b / 255`)
+- Split checks, 500 images: train 400 / test 100, 10 test images per digit, overlap 0, same seed gives the same split ✔
+- Split checks, all 60,000: train **48,000** / test **12,000**; test per digit [1185 1348 1192 1226 1168 1084 1184 1253 1170 1190] (each ≈ 20% of its class, e.g. digit 5: 1084 of 5,421); overlap 0; reproducible ✔
+
+**AI used this step?** Yes: guidance and hints (ai_log rows from 2026-10-21, Step 1).
+
+---
+
+### Step 2: KNN  (2026-10-21)
+
+**Before coding: my understanding**
+In my own words, how KNN classifies a digit: _(todo, after the explanation)_
+
+My predictions (written before running anything):
+- What k means and how it affects accuracy: "My guess is that k equals epoch, and with k being higher I expect better results."
+- Number of distances to classify one test image / all test images: "I'm not sure."
+- Most-confused digit pair: **6 and 9**, "since they are similar shape but flipped."
+
+**Plan**
+- `euclidean_distances(A, B)` → (len(A), len(B)): naive loop version first, then vectorized
+- `predict(dists, y_train, k)` → predicted labels via the k nearest + majority vote
+- Run k = 1, 3, 5 (compute distances once, reuse for every k)
+
+**Decisions + reasoning**
+- _(todo: tie-breaking rule, batch size)_
+
+**What went wrong**
+- _(todo)_
+
+**Result**
+- _(todo)_
+
+**AI used this step?** Yes: ai_log rows from 2026-10-21, Step 2.
