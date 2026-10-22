@@ -1,24 +1,8 @@
-"""knn.py: K-Nearest Neighbor classifier. NumPy ONLY.
+"""knn.py: K-Nearest Neighbor classifier, NumPy only.
 
-Requirements:
-- Input: flattened 784-d vectors from data.py.
-- Euclidean distance (required).
-- Classify by majority vote among the k nearest training images.
-- Test at least k = 1, 3, 5.
-- No scikit-learn (no KNeighborsClassifier).
-
-Blueprint:
-1. "Training" = just keep X_train and y_train (KNN has no parameters to learn).
-2. For each batch of test images:
-   a. pairwise_sq_dists  -> (B, N) squared Euclidean distances to every training image
-   b. k_nearest_labels   -> labels of the k_max closest images, sorted nearest-first
-   c. majority_vote      -> one prediction per test image, for every k (reuses step b)
-3. Accuracy = fraction of predictions equal to y_test.
-
-Decisions (record the reasoning in docs/journal.md):
-- Ties: among the tied labels, pick the one whose neighbor is closest.
-- Batch size 1000: a (1000, 48000) float32 distance matrix is ~190 MB;
-  the full (12000, 48000) one would be ~2.3 GB.
+KNN has no training step: it keeps the training set and labels each test image
+by a majority vote among its k closest training images (Euclidean distance).
+Run: python knn.py   (add --max-per-digit 100 for a quick test)
 """
 import argparse
 import time
@@ -26,46 +10,48 @@ import numpy as np
 from data import get_data
 
 def pairwise_sq_dists(A, X):
-    """Squared Euclidean distances between every row of A (B, D) and every row of X (N, D).
-
-    Uses ||a - x||^2 = ||a||^2 + ||x||^2 - 2 a.x, so the whole batch is one matrix
-    multiply instead of building a (B, N, 784) array of differences.
-    We skip the sqrt: it is monotonic, so the nearest neighbors are the same
-    with or without it (the metric is still Euclidean).
-    """
-    a_sq = np.sum(A ** 2, axis=1)[:, None]   # (B, 1): broadcasts across columns
-    x_sq = np.sum(X ** 2, axis=1)[None, :]   # (1, N): broadcasts down rows
+    # Squared Euclidean distance from every test row in A (B, 784) to every
+    # training row in X (N, 784) -> (B, N).
+    # Expanding ||a - x||^2 = ||a||^2 + ||x||^2 - 2 a.x turns the work into one
+    # matrix multiply, which is far faster than looping over pairs.
+    # No sqrt: it doesn't change which neighbors are closest, so it's wasted work.
+    a_sq = np.sum(A ** 2, axis=1)[:, None]   # (B, 1)
+    x_sq = np.sum(X ** 2, axis=1)[None, :]   # (1, N)
     D = a_sq + x_sq - 2 * (A @ X.T)          # (B, N)
-    # Rounding can make the distance between near-identical images slightly negative.
+    # Floating-point rounding can leave tiny negatives; a distance can't be below 0.
     return np.maximum(D, 0)
 
 def k_nearest_labels(D, y_train, k_max):
-    """Labels of the k_max nearest training images for each row of D, nearest first -> (B, k_max)."""
-    # argpartition finds the k_max smallest in O(N) instead of sorting all N columns,
-    # but returns them in no particular order...
+    # Labels of the k_max closest training images for each test row -> (B, k_max),
+    # ordered nearest first.
+    # argpartition finds the k_max smallest without sorting all N distances,
+    # but leaves them unordered...
     idx = np.argpartition(D, k_max - 1, axis=1)[:, :k_max]
-    # ...so sort just those k_max columns by distance (needed for the tie rule).
+    # ...so sort just those k_max by distance. majority_vote relies on this order.
     order = np.argsort(np.take_along_axis(D, idx, axis=1), axis=1, kind="stable")
     idx = np.take_along_axis(idx, order, axis=1)
     return y_train[idx]
 
 def majority_vote(labels):
-    """Most common label in each row of labels (B, k), which is sorted nearest-first."""
+    # Most common label in each row of labels (B, k) -> (B,).
     preds = np.empty(len(labels), dtype=labels.dtype)
     for i, row in enumerate(labels):
         counts = np.bincount(row, minlength=10)
         tied = counts == counts.max()
-        # Plain argmax would always favor the smallest digit in a tie. Instead,
-        # walk the neighbors nearest-first and take the first one with a winning label.
+        # Tie rule: argmax would always pick the smallest digit. Instead take the
+        # first winning label in the row, i.e. the one with the closest neighbor.
         preds[i] = next(label for label in row if tied[label])
     return preds
 
 def predict(X_train, y_train, X_test, ks=(1, 3, 5), batch_size=1000):
-    """Predict X_test for every k in ks. Distances are computed once per batch and reused for all k."""
+    # Predictions for every k in ks -> {k: (n_test,) array}.
+    # Test images go in batches: the full 12,000 x 48,000 distance matrix would
+    # need ~2.3 GB; a batch of 1,000 needs ~190 MB.
     k_max = max(ks)
     preds = {k: [] for k in ks}
     for start in range(0, len(X_test), batch_size):
         D = pairwise_sq_dists(X_test[start:start + batch_size], X_train)
+        # Find neighbors once for the largest k; smaller k are just the first k columns.
         labels = k_nearest_labels(D, y_train, k_max)
         for k in ks:
             preds[k].append(majority_vote(labels[:, :k]))
@@ -81,11 +67,12 @@ if __name__ == "__main__":
     X_train, y_train, X_test, y_test = get_data(flatten=True, max_per_digit=args.max_per_digit)
     print(f"train {X_train.shape}, test {X_test.shape}")
 
-    # Sanity check: with k=1 every training image's nearest neighbor is itself -> 100%.
+    # Sanity check: with k=1 a training image's nearest neighbor is itself, so expect 100%.
     n = min(500, len(X_train))
     self_acc = np.mean(predict(X_train, y_train, X_train[:n], ks=(1,))[1] == y_train[:n])
     print(f"sanity check, k=1 on training images: {self_acc:.2%} (expect 100%)")
 
+    # Training time is zero for KNN, so only prediction is timed.
     start = time.perf_counter()
     preds = predict(X_train, y_train, X_test, ks=args.ks)
     predict_time = time.perf_counter() - start
